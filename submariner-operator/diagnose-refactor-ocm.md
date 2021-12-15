@@ -1,0 +1,105 @@
+# Refactor subctl diagonose for use with OCM
+
+## Summary
+
+Currently only way to run diagnostics on a Submariner installation is through `subctl` CLI. This requires user or admin
+to run it manually from a host. There is no way to run it through UI like OCM or deployment tools like helm charts etc.
+
+## Proposal
+
+This enhancement proposes decouple the diagnose implementation from `subctl` into a Debug controller running
+in the `submariner-operator` namespace. A new CRD `SubmarinerDebug` will be created. User or Admin can create this CR to
+trigger `diagnose` run in that cluster and results will be stored in the corresponding Status fields of SubmarinerDebug
+CR created.
+
+## Design Details
+
+* A new CRD `SubmarinerDebug` will be created. Config fields will match current flag sin `subctl` and will have Status
+fields to capture results.
+* A new controller SubmarinerDebugController will be added to `submariner-operator` Deployment.
+* SubmarinerDebugController will listen for creation of SubmarinerDebug and on creation spawn a `SubmarinerDiagnose`
+Deployment which will run the diagnostics.
+* SubmarinerDebugController will update the created SubmarinerDebug CR's status fields with results of diagnostics run.
+* `subctl` will internally create the `SubmarinerDebug` CR with relevant config values and then read the Status fields to
+display results to user in the current format.
+* `subctl` will delete the SubmarinerDebug CR once it is done.
+* In case of OCM, SubmarinerAddon or a similar SubmarinerDebugAddon will create/delete the SubmarinerDebug CR and read
+the results.
+* SubmarinerDebugAddon in OCM will also convert the results into appropriate format to be consumed by the OCM UI.
+* Support will be added to OCM UI to run diagnostics on a cluster with a single click and then display the results.
+* Results of diagnose will also be exposed as Prometheus metrics. This will allow any Prometheus based observability
+solutions to consume the results of diagnose. This will also provide a quick and easy way to show results in the UI while
+SubmarinerDebugAddon changes are in-progress.
+* [Optional scope] Use SubmarinerDebug to run `gather` too so user can collect logs from UI without needing `subctl` CLI
+
+### SubmarinerDebug CRD
+
+```Go
+// SubmarinerDebugSpec defines the desired configuration to run SubmarinerDebug
+type SubmarinerDebugSpec struct {
+	All             bool         `json:"all,omitempty"`
+	CNI             bool         `json:"CNI,omitempty"`
+	Connections     bool         `json:"connections,omitempty"`
+	Deployment      bool         `json:"deployment,omitempty"`
+	Firewall        bool         `json:"firewall,omitempty"`
+	GatherLogs      bool         `json:"gatherLogs,omitempty"`
+	K8sVersion      bool         `json:"k8sVersion,omitempty"`
+	KubeProxyMode   bool         `json:"kubeProxyMode,omitempty"`
+	FirewallOptions FirewallOptions `json:"firewallOptions,omitempty"`
+
+	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
+	// Important: Run "make manifests" to regenerate code after modifying this file
+	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
+}
+
+type FirewallOptions struct {
+	InterCluster bool `json:"interCluster,omitempty"`
+	IntraCluster bool `json:"intraCluster,omitempty"`
+	Metrics      bool `json:"metrics,omitempty"`
+    RemoteCluster            string `json:"remoteCluster,omitempty"`
+    RemoteK8sAPIServer       string `json:"remoteK8sAPIServer,omitempty"`
+    RemoteK8sAPIServerToken  string `json:"remoteK8sAPIServerToken,omitempty"`
+    RemoteK8sCA              string `json:"remoteK8sCA,omitempty"`
+    RemoteK8sSecret          string `json:"remoteK8sSecret,omitempty"`
+	RemoteK8sRemoteNamespace string `json:"remoteK8sRemoteNamespace,omitempty"`
+}
+
+// SubmarinerDebugStatus defines the observed result of SubmarinerDebug
+type SubmarinerDebugStatus struct {
+	Conditions []metav1.Condition `json:"conditions"`
+	K8sVersion string `json:"k8sVersion,omitempty"`
+	CNIType string `json:"cniType,omitempty"`
+	KubeProxyMode bool `json:"kubeProxyMode,omitempty"`
+	FirewallStatus FirewallStatus `json:"firewallStatus,omitempty"`
+	// DeploymentStatus already captured in SubmarinerStatus, no need to duplicate information.
+	// DeploymentStatus SubmarinerStatus `json:"DeploymentStatus,omitempty"`
+}
+
+type FirewallPortStatus string
+
+const (
+	Allowed = "allowed"
+	Blocked = "blocked"
+	Unknown = "unknown"
+)
+
+type FirewallStatus struct {
+	Metrics FirewallPortStatus `json:"metricsStatus,omitempty"`
+	VxLanTunnel FirewallPortStatus `json:"vxLanTunnel,omitempty"`
+	IPSecTunnel FirewallPortStatus `json:"IPSecTunnel,omitempty"`
+}
+```
+
+### Prometheus Metrics
+TBD
+
+## Work items
+
+* New SubmarinerDebug CR and controller
+* Subctl changes to use SubmarinerDebug
+* CI
+* SubmarinerDebugAddon and relevant CR changes
+* OCM UI changes to consume Prometheus Metrics generated by SubmarinerDebug
+* OCM UI changes to consume SubmarinerDebug results
+* Docs
+
